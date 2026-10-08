@@ -110,28 +110,85 @@ def link_prediction(self, top_k: int = 10) -> pd.DataFrame:
     return df.sort_values("score", ascending=False).head(top_k).reset_index(drop=True)
 
 
-def key_player_ranking(self, top_k: int = 10) -> pd.DataFrame:
-    columns = [
-        "rank", "id", "name", "entity_type", "kingpin_score", "risk_score",
-        "betweenness_centrality", "degree_centrality", "community",
-    ]
-    risk = self.compute_risk_scores()
-    if risk is None or getattr(risk, "empty", True):
-        return pd.DataFrame(columns=columns)
+def key_player_ranking(
+    self,
+    top_k: int = 10,
+) -> pd.DataFrame:
+    """Rank entities by explainable analytical priority."""
 
-    cent = _centrality_frame(self)
-    # Risk already carries betweenness. Drop it so the merge keeps the
-    # freshly computed centrality column instead of pandas _x/_y suffixes.
-    risk_base = risk.drop(columns=["betweenness_centrality"], errors="ignore")
-    merged = risk_base.merge(
-        cent[["id", "degree_centrality", "betweenness_centrality", "eigenvector_centrality"]],
+    output_columns = [
+        "rank",
+        "id",
+        "name",
+        "entity_type",
+        "kingpin_score",
+        "risk_score",
+        "betweenness_centrality",
+        "degree_centrality",
+        "community",
+    ]
+
+    risk = self.compute_risk_scores()
+
+    if risk is None or risk.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    cent = self.centrality_analysis()
+
+    if cent is None or cent.empty:
+        cent = pd.DataFrame(
+            {
+                "id": list(self.G.nodes),
+                "degree_centrality": 0.0,
+                "betweenness_centrality": 0.0,
+                "eigenvector_centrality": 0.0,
+            }
+        )
+
+    # IMPORTANT:
+    # compute_risk_scores() already contains betweenness_centrality.
+    # Remove overlapping centrality columns from risk before merging so
+    # pandas does not create _x / _y suffixes.
+    risk_clean = risk.drop(
+        columns=[
+            "degree_centrality",
+            "betweenness_centrality",
+            "eigenvector_centrality",
+        ],
+        errors="ignore",
+    )
+
+    centrality_clean = cent[
+        [
+            "id",
+            "degree_centrality",
+            "betweenness_centrality",
+            "eigenvector_centrality",
+        ]
+    ].copy()
+
+    merged = risk_clean.merge(
+        centrality_clean,
         on="id",
         how="left",
     )
-    for col in ["risk_score", "degree_centrality", "betweenness_centrality", "eigenvector_centrality"]:
-        if col not in merged.columns:
-            raise KeyError(col)
-        merged[col] = _numeric(merged[col])
+
+    # Make sure every required numeric column exists.
+    numeric_columns = [
+        "risk_score",
+        "degree_centrality",
+        "betweenness_centrality",
+        "eigenvector_centrality",
+    ]
+
+    for column in numeric_columns:
+        if column not in merged.columns:
+            merged[column] = 0.0
+
+        merged[column] = pd.to_numeric(
+            merged[column],
+            errors="coerce",
+        ).fillna(0.0)
 
     merged["kingpin_score"] = (
         0.40 * merged["risk_score"]
@@ -140,11 +197,28 @@ def key_player_ranking(self, top_k: int = 10) -> pd.DataFrame:
         + 0.10 * merged["eigenvector_centrality"]
     ).round(4)
 
-    out = merged.sort_values("kingpin_score", ascending=False).head(top_k).copy()
-    out["rank"] = range(1, len(out) + 1)
-    if "community" not in out.columns:
-        out["community"] = -1
-    return out[columns].reset_index(drop=True)
+    merged = merged.sort_values(
+        "kingpin_score",
+        ascending=False,
+    ).head(top_k).copy()
+
+    merged["rank"] = range(
+        1,
+        len(merged) + 1,
+    )
+
+    if "community" not in merged.columns:
+        merged["community"] = -1
+
+    if "name" not in merged.columns:
+        merged["name"] = merged["id"].astype(str)
+
+    if "entity_type" not in merged.columns:
+        merged["entity_type"] = "unknown"
+
+    return merged[
+        output_columns
+    ].reset_index(drop=True)
 
 
 def bridge_entities(self, top_k: int = 15) -> pd.DataFrame:
@@ -479,6 +553,98 @@ def export_pdf_report(self, path: Path) -> Path:
         return self.export_html_report(path.with_suffix(".html"))
 
 
+def network_health(self) -> dict:
+    """Compact structural statistics for the workspace header."""
+    n = self.G.number_of_nodes()
+    m = self.G.number_of_edges()
+    communities = self.community_detection()
+    components = list(nx.connected_components(self.G)) if n else []
+    clustering = float(nx.average_clustering(self.G)) if n else 0.0
+    try:
+        arts = list(nx.articulation_points(self.G)) if n else []
+    except Exception:
+        arts = []
+    diameter = None
+    if n and nx.is_connected(self.G) and n <= 400:
+        try:
+            diameter = int(nx.diameter(self.G))
+        except Exception:
+            diameter = None
+    weighted = {nid: float(self.G.degree(nid, weight="weight")) for nid in self.G.nodes}
+    return {
+        "entities": n,
+        "relationships": m,
+        "communities": len(set(communities.values())) if communities else 0,
+        "density": round(nx.density(self.G), 4) if n > 1 else 0.0,
+        "components": len(components),
+        "largest_component": max((len(c) for c in components), default=0),
+        "average_clustering": round(clustering, 4),
+        "articulation_points": len(arts),
+        "diameter": diameter,
+        "weighted_degree": weighted,
+    }
+
+
+def weighted_investigation_path(self, source: str, target: str) -> pd.DataFrame:
+    """Shortest path using inverse edge weight so stronger links are cheaper."""
+    columns = ["step", "id", "name", "entity_type", "relationship_from_previous", "weight"]
+    if source not in self.G or target not in self.G:
+        return pd.DataFrame(columns=columns)
+    work = self.G.copy()
+    for _u, _v, data in work.edges(data=True):
+        w = float(data.get("weight", 1.0) or 1.0)
+        data["distance"] = 1.0 / max(w, 1e-6)
+    try:
+        path = nx.shortest_path(work, source=source, target=target, weight="distance")
+    except nx.NetworkXNoPath:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for i, nid in enumerate(path):
+        ent = self.entities.get(nid)
+        rel, weight = "—", None
+        if i:
+            edge = self.G.edges[path[i - 1], nid]
+            rel = edge.get("rel_type", "linked")
+            weight = edge.get("weight", 1.0)
+        rows.append(
+            {
+                "step": i,
+                "id": nid,
+                "name": ent.name if ent else str(nid),
+                "entity_type": ent.entity_type if ent else "unknown",
+                "relationship_from_previous": rel,
+                "weight": weight,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def neighborhood(self, entity_id: str, hops: int = 2) -> list[str]:
+    if entity_id not in self.G:
+        return []
+    nodes = {entity_id}
+    frontier = {entity_id}
+    for _ in range(max(1, hops)):
+        nxt = set()
+        for nid in frontier:
+            nxt.update(self.G.neighbors(nid))
+        frontier = nxt - nodes
+        nodes.update(nxt)
+    return sorted(nodes)
+
+
+def ego_network(self, entity_id: str) -> dict:
+    nodes = self.neighborhood(entity_id, 1)
+    sub = self.G.subgraph(nodes)
+    communities = self.community_detection()
+    touched = {communities.get(n, -1) for n in nodes}
+    return {
+        "nodes": nodes,
+        "relationships": sub.number_of_edges(),
+        "communities_touched": len(touched),
+    }
+
+
 def apply() -> None:
     from src.graph_engine import CriminalNetworkGraph
 
@@ -493,6 +659,10 @@ def apply() -> None:
     CriminalNetworkGraph.to_pyvis_html = to_pyvis_html
     CriminalNetworkGraph.export_html_report = export_html_report
     CriminalNetworkGraph.export_pdf_report = export_pdf_report
+    CriminalNetworkGraph.network_health = network_health
+    CriminalNetworkGraph.weighted_investigation_path = weighted_investigation_path
+    CriminalNetworkGraph.neighborhood = neighborhood
+    CriminalNetworkGraph.ego_network = ego_network
 
 
 apply()

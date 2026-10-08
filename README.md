@@ -18,7 +18,21 @@ This project provides:
 - Export of subgraphs and analysis reports
 - Fully offline demo mode with synthetic data
 
-## Features (V2 intelligence console)
+## Features (V3 intelligence workspace)
+
+The UI is a desktop investigation workspace, not a tabbed dashboard:
+
+- Left navigation rail: Overview, Network, Investigate, Entities, Signals, Timeline, Cases, Reports, Settings
+- Command search across entity name, ID, type, and relationship type
+- Central network map with risk, community, and type color modes, labels, hop focus, and path highlight
+- Right-side entity intelligence panel driven by the selected entity
+- Signal center for bridge candidates, anomalies, suspicious links, and potential links
+- Community cards that filter the map
+- Local JSON case files (`data/cases/cases.json`)
+- Report builder for local HTML and PDF
+- Analytical priority is a heuristic review signal, not legal evidence
+
+## Previous feature set still in the engine
 
 - **Dark analyst console** – overview metrics, priority queue, and filtered workspace
 - **Graph engine** – NetworkX weighted undirected graph (`CriminalNetworkGraph`)

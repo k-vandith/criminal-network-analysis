@@ -7,5 +7,8 @@ venv/
 .DS_Store
 *.log
 data/generated/
+data/cases/
+data/sample/*.html
+data/sample/*.pdf
 .idea/
 .vscode/
