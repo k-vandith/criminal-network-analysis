@@ -18,16 +18,20 @@ This project provides:
 - Export of subgraphs and analysis reports
 - Fully offline demo mode with synthetic data
 
-## Features
+## Features (V2 intelligence console)
 
-- **Graph engine** – NetworkX-backed directed/undirected graphs
-- **Centrality suite** – degree, betweenness, closeness, eigenvector
-- **Community detection** – greedy modularity communities
-- **Risk scoring** – rule-based flags for high-degree bridges, dense cliques
-- **Search & filter** – by node attributes and edge types
-- **Import / export** – CSV, JSON, GraphML-friendly dumps
-- **Streamlit UI** – interactive exploration
-- **Demo mode** – synthetic network generator (no real PII)
+- **Dark analyst console** – overview metrics, priority queue, and filtered workspace
+- **Graph engine** – NetworkX weighted undirected graph (`CriminalNetworkGraph`)
+- **Centrality suite** – degree, weighted betweenness, closeness, eigenvector (numpy fallback)
+- **Analytical priority** – explainable composite heuristic (not a finding of guilt)
+- **Bridge candidates** – entities linking different communities
+- **Anomaly candidates** – degree and weighted-degree z-score signals for review
+- **Community summaries** – size, density, dominant type, core entity
+- **Entity investigation** – profile, reasons, neighbors, shortest relationship path
+- **Link prediction** and suspicious-relationship heuristics
+- **Timeline** for synthetic event entities
+- **Local HTML / PDF reports** (PDF falls back to HTML if ReportLab is missing)
+- **Demo mode** – synthetic network generator only (no real persons)
 
 ## Architecture
 
@@ -60,10 +64,12 @@ criminal-network-analysis/
 ├── requirements.txt
 ├── .gitignore
 ├── src/
-│   ├── app.py              # Streamlit UI
-│   └── graph_engine.py     # Core graph analysis
+│   ├── app.py              # Streamlit intelligence console
+│   ├── graph_engine.py     # Core graph analysis
+│   └── graph_features.py   # Analyst features (monkey-patched)
 ├── tests/
-│   └── test_graph.py
+│   ├── test_graph.py
+│   └── test_advanced_features.py
 ├── data/
 ├── scripts/
 │   ├── setup_env.py
@@ -137,36 +143,51 @@ Optional. Defaults work for demo mode. See `.env.example` if present.
 
 ## Dataset / Demo Mode
 
-```bash
+Synthetic data only. Do not load real case files into a public clone.
+
+### Windows (PowerShell)
+
+```powershell
+cd criminal-network-analysis
+.venv\Scripts\Activate.ps1
 python scripts/generate_demo_data.py
-```
-
-Generates a synthetic association network under `data/` for offline demos.
-
-## Running the Application
-
-```bash
+python -m pytest -q
 streamlit run src/app.py
 ```
 
-Open http://localhost:8501
+### Linux / macOS
+
+```bash
+cd criminal-network-analysis
+source .venv/bin/activate
+python scripts/generate_demo_data.py
+python -m pytest -q
+streamlit run src/app.py
+```
+
+Generates `data/sample/synthetic_network.json` for offline demos. Open http://localhost:8501
 
 ## API Usage
 
 This project is UI-first. Core analysis is available programmatically:
 
 ```python
-from src.graph_engine import GraphEngine
-g = GraphEngine()
-g.load_csv("data/nodes.csv", "data/edges.csv")
-print(g.centrality())
-print(g.communities())
+from src.graph_engine import CriminalNetworkGraph
+import src.graph_features  # registers analyst methods
+
+g = CriminalNetworkGraph()
+g.import_json("data/sample/synthetic_network.json")
+print(g.centrality_analysis())
+print(g.key_player_ranking(10))
+print(g.bridge_entities())
 ```
+
+`kingpin_score` is the historical column name for **analytical priority**. It is a heuristic, not evidence.
 
 ## Testing
 
 ```bash
-pytest -v
+python -m pytest -q
 ```
 
 ## Troubleshooting
@@ -181,8 +202,10 @@ pytest -v
 ## Limitations
 
 - Designed for moderate-size graphs (thousands of nodes), not billion-edge graphs.
-- Risk scores are heuristic, not legal evidence.
-- Demo data is synthetic and must not be treated as real investigations.
+- Analytical risk and analytical priority are heuristics. They are **not** proof of guilt, not a legal finding, and not evidence.
+- The system is an offline synthetic demonstration. It does not harvest external data and must not be loaded with real-person case data in a public repository.
+- Community detection, bridge ratios, anomaly z-scores, and link scores are signals for analyst review only.
+- The graph is undirected. Betweenness uses edge `weight`. Eigenvector falls back to a NumPy solver, then zeros, if power iteration does not converge.
 
 ## Security / Privacy
 

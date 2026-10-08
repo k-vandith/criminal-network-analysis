@@ -1,4 +1,9 @@
-"""Extra features monkey-patched onto CriminalNetworkGraph at import time."""
+"""Advanced analyst features monkey-patched onto CriminalNetworkGraph.
+
+The module keeps the original public API while adding explainable,
+investigator-facing analytics: bridges, anomalies, community profiles,
+entity profiles, shortest paths, and robust analytical-priority ranking.
+"""
 from __future__ import annotations
 
 import logging
@@ -11,115 +16,427 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _numeric(series: pd.Series | Any, default: float = 0.0) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").fillna(default)
+
+
+def _centrality_frame(self) -> pd.DataFrame:
+    """Compute degree, weighted betweenness, closeness, and eigenvector centrality."""
+    columns = [
+        "id", "name", "entity_type", "degree_centrality",
+        "betweenness_centrality", "closeness_centrality",
+        "eigenvector_centrality",
+    ]
+    if self.G.number_of_nodes() == 0:
+        return pd.DataFrame(columns=columns)
+
+    degree = nx.degree_centrality(self.G)
+    betweenness = nx.betweenness_centrality(self.G, weight="weight", normalized=True)
+    closeness = nx.closeness_centrality(self.G)
+    try:
+        eigenvector = nx.eigenvector_centrality(
+            self.G, max_iter=1000, tol=1e-06, weight="weight"
+        )
+    except (nx.PowerIterationFailedConvergence, ValueError, nx.NetworkXException):
+        try:
+            eigenvector = nx.eigenvector_centrality_numpy(self.G, weight="weight")
+        except Exception:
+            logger.warning("Eigenvector centrality failed; using zeros")
+            eigenvector = {node: 0.0 for node in self.G.nodes}
+
+    rows = []
+    for nid in self.G.nodes:
+        ent = self.entities.get(nid)
+        rows.append(
+            {
+                "id": nid,
+                "name": ent.name if ent else str(nid),
+                "entity_type": ent.entity_type if ent else "unknown",
+                "degree_centrality": round(float(degree.get(nid, 0.0)), 6),
+                "betweenness_centrality": round(float(betweenness.get(nid, 0.0)), 6),
+                "closeness_centrality": round(float(closeness.get(nid, 0.0)), 6),
+                "eigenvector_centrality": round(float(eigenvector.get(nid, 0.0)), 6),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def link_prediction(self, top_k: int = 10) -> pd.DataFrame:
+    columns = ["source", "target", "source_name", "target_name", "score", "method"]
     if self.G.number_of_nodes() < 2:
-        return pd.DataFrame(columns=["source", "target", "score", "method"])
+        return pd.DataFrame(columns=columns)
+
     preds: dict[tuple[str, str], float] = {}
     try:
         for u, v, p in nx.resource_allocation_index(self.G):
             a, b = sorted((u, v))
             preds[(a, b)] = preds.get((a, b), 0.0) + float(p)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Resource allocation prediction failed: %s", exc)
     try:
         for u, v, p in nx.jaccard_coefficient(self.G):
             a, b = sorted((u, v))
             preds[(a, b)] = preds.get((a, b), 0.0) + 0.5 * float(p)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Jaccard prediction failed: %s", exc)
+
+    method = "resource_allocation+jaccard"
     if not preds:
-        for u, v, p in nx.preferential_attachment(self.G):
-            a, b = sorted((u, v))
-            preds[(a, b)] = float(p)
-    rows = [
-        {
-            "source": a, "target": b,
-            "source_name": self.entities[a].name if a in self.entities else a,
-            "target_name": self.entities[b].name if b in self.entities else b,
-            "score": round(s, 6), "method": "resource_allocation+jaccard",
-        }
-        for (a, b), s in preds.items() if s > 0
-    ]
-    df = pd.DataFrame(rows)
+        method = "preferential_attachment"
+        try:
+            for u, v, p in nx.preferential_attachment(self.G):
+                a, b = sorted((u, v))
+                preds[(a, b)] = float(p)
+        except Exception as exc:
+            logger.warning("Preferential attachment prediction failed: %s", exc)
+
+    rows = []
+    for (a, b), score in preds.items():
+        if score <= 0:
+            continue
+        rows.append(
+            {
+                "source": a,
+                "target": b,
+                "source_name": self.entities[a].name if a in self.entities else str(a),
+                "target_name": self.entities[b].name if b in self.entities else str(b),
+                "score": round(score, 6),
+                "method": method,
+            }
+        )
+    df = pd.DataFrame(rows, columns=columns)
     if df.empty:
         return df
     return df.sort_values("score", ascending=False).head(top_k).reset_index(drop=True)
 
 
 def key_player_ranking(self, top_k: int = 10) -> pd.DataFrame:
+    columns = [
+        "rank", "id", "name", "entity_type", "kingpin_score", "risk_score",
+        "betweenness_centrality", "degree_centrality", "community",
+    ]
     risk = self.compute_risk_scores()
-    if risk.empty:
-        return risk
-    cent = self.centrality_analysis()
-    merged = risk.merge(
+    if risk is None or getattr(risk, "empty", True):
+        return pd.DataFrame(columns=columns)
+
+    cent = _centrality_frame(self)
+    # Risk already carries betweenness. Drop it so the merge keeps the
+    # freshly computed centrality column instead of pandas _x/_y suffixes.
+    risk_base = risk.drop(columns=["betweenness_centrality"], errors="ignore")
+    merged = risk_base.merge(
         cent[["id", "degree_centrality", "betweenness_centrality", "eigenvector_centrality"]],
-        on="id", how="left",
+        on="id",
+        how="left",
     )
+    for col in ["risk_score", "degree_centrality", "betweenness_centrality", "eigenvector_centrality"]:
+        if col not in merged.columns:
+            raise KeyError(col)
+        merged[col] = _numeric(merged[col])
+
     merged["kingpin_score"] = (
-        0.40 * merged["risk_score"] + 0.30 * merged["betweenness_centrality"]
-        + 0.20 * merged["degree_centrality"] + 0.10 * merged["eigenvector_centrality"]
+        0.40 * merged["risk_score"]
+        + 0.30 * merged["betweenness_centrality"]
+        + 0.20 * merged["degree_centrality"]
+        + 0.10 * merged["eigenvector_centrality"]
     ).round(4)
-    out = merged.sort_values("kingpin_score", ascending=False).head(top_k)
+
+    out = merged.sort_values("kingpin_score", ascending=False).head(top_k).copy()
     out["rank"] = range(1, len(out) + 1)
-    return out[["rank", "id", "name", "entity_type", "kingpin_score", "risk_score",
-                "betweenness_centrality", "degree_centrality"]].reset_index(drop=True)
+    if "community" not in out.columns:
+        out["community"] = -1
+    return out[columns].reset_index(drop=True)
 
 
-def to_pyvis_html(self, path: Path | None = None, height: str = "600px") -> str:
+def bridge_entities(self, top_k: int = 15) -> pd.DataFrame:
+    """Find entities that connect otherwise different communities."""
+    columns = [
+        "id", "name", "entity_type", "community", "degree",
+        "cross_community_links", "bridge_ratio",
+    ]
+    if self.G.number_of_nodes() == 0:
+        return pd.DataFrame(columns=columns)
+    communities = self.community_detection()
+    rows = []
+    for nid in self.G.nodes:
+        neighbors = list(self.G.neighbors(nid))
+        degree = len(neighbors)
+        cross = sum(1 for n in neighbors if communities.get(n, -1) != communities.get(nid, -1))
+        ent = self.entities.get(nid)
+        rows.append(
+            {
+                "id": nid,
+                "name": ent.name if ent else str(nid),
+                "entity_type": ent.entity_type if ent else "unknown",
+                "community": communities.get(nid, -1),
+                "degree": degree,
+                "cross_community_links": cross,
+                "bridge_ratio": round(cross / degree, 4) if degree else 0.0,
+            }
+        )
+    df = pd.DataFrame(rows, columns=columns)
+    return df.sort_values(
+        ["cross_community_links", "bridge_ratio", "degree"],
+        ascending=False,
+    ).head(top_k).reset_index(drop=True)
+
+
+def community_summary(self) -> pd.DataFrame:
+    """Return one row per detected community with interpretable statistics."""
+    mapping = self.community_detection()
+    if not mapping:
+        return pd.DataFrame()
+
+    groups: dict[int, list[str]] = {}
+    for nid, cid in mapping.items():
+        groups.setdefault(cid, []).append(nid)
+
+    rows = []
+    for cid, nodes in sorted(groups.items()):
+        sub = self.G.subgraph(nodes)
+        types = pd.Series(
+            [self.entities[n].entity_type for n in nodes if n in self.entities]
+        ).value_counts()
+        leader = None
+        leader_score = -1.0
+        for node in nodes:
+            score = float(sub.degree(node, weight="weight"))
+            if score > leader_score:
+                leader, leader_score = node, score
+        rows.append(
+            {
+                "community": cid,
+                "entities": len(nodes),
+                "relationships": sub.number_of_edges(),
+                "density": round(nx.density(sub), 4) if len(nodes) > 1 else 0.0,
+                "dominant_type": types.index[0] if not types.empty else "unknown",
+                "core_entity": self.entities[leader].name if leader in self.entities else str(leader),
+                "core_degree_weight": round(leader_score, 2),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(
+        ["entities", "relationships"], ascending=False
+    ).reset_index(drop=True)
+
+
+def anomaly_detection(self, top_k: int = 15) -> pd.DataFrame:
+    """Explainable degree/relationship anomalies using z-scores."""
+    if self.G.number_of_nodes() == 0:
+        return pd.DataFrame()
+
+    degrees = pd.Series(dict(self.G.degree()), dtype=float)
+    weights = pd.Series(
+        {n: float(self.G.degree(n, weight="weight")) for n in self.G.nodes},
+        dtype=float,
+    )
+    mean_d, std_d = degrees.mean(), degrees.std(ddof=0)
+    mean_w, std_w = weights.mean(), weights.std(ddof=0)
+    std_d = std_d if std_d > 1e-12 else 1.0
+    std_w = std_w if std_w > 1e-12 else 1.0
+
+    rows = []
+    for nid in self.G.nodes:
+        ent = self.entities.get(nid)
+        degree_z = (degrees[nid] - mean_d) / std_d
+        weight_z = (weights[nid] - mean_w) / std_w
+        score = max(0.0, degree_z, weight_z)
+        reason = (
+            "weighted relationship concentration"
+            if weight_z >= degree_z
+            else "unusual connection count"
+        )
+        rows.append(
+            {
+                "id": nid,
+                "name": ent.name if ent else str(nid),
+                "entity_type": ent.entity_type if ent else "unknown",
+                "degree": int(degrees[nid]),
+                "weighted_degree": round(float(weights[nid]), 2),
+                "anomaly_score": round(float(score), 4),
+                "reason": reason,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("anomaly_score", ascending=False).head(top_k).reset_index(drop=True)
+
+
+def entity_profile(self, entity_id: str) -> dict[str, Any] | None:
+    """Return a compact, explainable profile for one entity."""
+    if entity_id not in self.G:
+        return None
+
+    ent = self.entities.get(entity_id)
+    communities = self.community_detection()
+    cent = _centrality_frame(self)
+    row = cent[cent["id"] == entity_id]
+    c = row.iloc[0].to_dict() if not row.empty else {}
+    risk_df = self.compute_risk_scores()
+    r = risk_df[risk_df["id"] == entity_id] if not risk_df.empty and "id" in risk_df.columns else risk_df
+    risk = (
+        float(r["risk_score"].iloc[0])
+        if not r.empty and "risk_score" in r.columns
+        else float(self.G.nodes[entity_id].get("risk_score", 0.0))
+    )
+    neighbors = []
+    for n in self.G.neighbors(entity_id):
+        other = self.entities.get(n)
+        neighbors.append(
+            {
+                "id": n,
+                "name": other.name if other else str(n),
+                "entity_type": other.entity_type if other else "unknown",
+                "relationship": self.G.edges[entity_id, n].get("rel_type", "linked"),
+                "weight": self.G.edges[entity_id, n].get("weight", 1.0),
+            }
+        )
+
+    reasons = []
+    if risk >= 0.75:
+        reasons.append("high analytical risk score")
+    if float(c.get("betweenness_centrality", 0) or 0) >= 0.5:
+        reasons.append("strong network-broker position")
+    if len(neighbors) >= 5:
+        reasons.append("high number of direct relationships")
+    if ent and ent.attributes.get("watchlist"):
+        reasons.append("watchlist attribute present in supplied data")
+    if ent and ent.attributes.get("suspicious_flag"):
+        reasons.append("suspicious flag present in supplied data")
+
+    return {
+        "id": entity_id,
+        "name": ent.name if ent else str(entity_id),
+        "entity_type": ent.entity_type if ent else "unknown",
+        "risk_score": round(risk, 4),
+        "community": communities.get(entity_id, -1),
+        "attributes": ent.attributes if ent else {},
+        "centrality": c,
+        "neighbors": sorted(neighbors, key=lambda x: -float(x["weight"])),
+        "reasons": reasons,
+    }
+
+
+def shortest_investigation_path(self, source: str, target: str) -> pd.DataFrame:
+    """Find an unweighted shortest relationship path between two entities."""
+    columns = ["step", "id", "name", "entity_type", "relationship_from_previous"]
+    if source not in self.G or target not in self.G:
+        return pd.DataFrame(columns=columns)
+    try:
+        path = nx.shortest_path(self.G, source=source, target=target)
+    except nx.NetworkXNoPath:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for i, nid in enumerate(path):
+        ent = self.entities.get(nid)
+        rel = "—"
+        if i:
+            rel = self.G.edges[path[i - 1], nid].get("rel_type", "linked")
+        rows.append(
+            {
+                "step": i,
+                "id": nid,
+                "name": ent.name if ent else str(nid),
+                "entity_type": ent.entity_type if ent else "unknown",
+                "relationship_from_previous": rel,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def key_player_explanations(self, top_k: int = 10) -> pd.DataFrame:
+    ranking = self.key_player_ranking(top_k).copy()
+    if ranking.empty:
+        return ranking
+    profiles = {row["id"]: self.entity_profile(row["id"]) for _, row in ranking.iterrows()}
+    ranking["why_flagged"] = [
+        "; ".join(profiles[row["id"]]["reasons"][:4])
+        if profiles.get(row["id"]) and profiles[row["id"]]["reasons"]
+        else "high composite analytical priority"
+        for _, row in ranking.iterrows()
+    ]
+    return ranking
+
+
+def to_pyvis_html(self, path: Path | None = None, height: str = "620px") -> str:
     path = path or Path("data/sample/network_interactive.html")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         from pyvis.network import Network
-        net = Network(height=height, width="100%", bgcolor="#0e1117", font_color="white")
+
+        net = Network(height=height, width="100%", bgcolor="#0b1020", font_color="#eaf0ff")
         net.barnes_hut()
         communities = self.community_detection()
         for nid, data in self.G.nodes(data=True):
             ent = self.entities.get(nid)
-            risk = float(data.get("risk_score", ent.risk_score if ent else 0))
-            net.add_node(nid, label=data.get("name", nid),
-                title=f"{data.get('name', nid)} risk={risk:.2f}",
+            risk = float(data.get("risk_score", ent.risk_score if ent else 0.0))
+            risk = max(0.0, min(1.0, risk))
+            net.add_node(
+                nid,
+                label=data.get("name", nid),
+                title=f"{data.get('name', nid)}<br>Analytical risk: {risk:.2f}",
                 value=10 + 40 * risk,
-                color=f"rgb({int(255 * risk)},{int(80 * (1 - risk))},40)",
-                group=communities.get(nid, 0))
+                group=communities.get(nid, 0),
+            )
         for u, v, d in self.G.edges(data=True):
-            net.add_edge(u, v, title=d.get("rel_type", ""), value=d.get("weight", 1.0))
+            net.add_edge(
+                u,
+                v,
+                title=d.get("rel_type", "linked"),
+                value=float(d.get("weight", 1.0)),
+            )
         net.save_graph(str(path))
         return path.read_text(encoding="utf-8")
     except Exception as exc:
         logger.warning("pyvis unavailable (%s)", exc)
-        html = "<html><body><h3>Network (pyvis not installed)</h3><ul>"
-        for nid, data in self.G.nodes(data=True):
-            html += f"<li>{data.get('name', nid)}</li>"
-        html += "</ul></body></html>"
+        html = "<html><body><h3>Interactive graph unavailable</h3></body></html>"
         path.write_text(html, encoding="utf-8")
         return html
 
 
 def export_html_report(self, path: Path) -> Path:
+    path = Path(path)
     risk = self.compute_risk_scores()
-    kingpins = self.key_player_ranking(10)
+    kingpins = self.key_player_explanations(10)
+    bridges = self.bridge_entities(10)
+    anomalies = self.anomaly_detection(10)
     links = self.link_prediction(10)
-    flags = self.suspicious_relationships()
+    flags = pd.DataFrame(self.suspicious_relationships())
     timeline = self.timeline_events()
 
-    def table(df):
-        if df is None or (hasattr(df, "empty") and df.empty):
+    def table(df: pd.DataFrame) -> str:
+        if df is None or df.empty:
             return "<p><em>None</em></p>"
-        return df.to_html(index=False, border=0)
+        return df.to_html(index=False, border=0, classes="data")
 
-    html = f"""<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><title>Report</title>
-<style>body{{font-family:system-ui;margin:2rem;background:#111;color:#eee}}
-h1,h2{{color:#f5a623}} table{{border-collapse:collapse;width:100%}}
-th,td{{border:1px solid #444;padding:.4rem}}</style></head><body>
-<h1>Criminal Network Analysis Report</h1>
-<p>Nodes: {self.G.number_of_nodes()} · Edges: {self.G.number_of_edges()}</p>
-<h2>Key players / kingpins</h2>{table(kingpins)}
-<h2>Risk scores</h2>{table(risk.head(20))}
-<h2>Link predictions</h2>{table(links)}
-<h2>Suspicious relationships</h2>{table(pd.DataFrame(flags))}
+    high = int((risk["risk_score"] >= 0.75).sum()) if not risk.empty and "risk_score" in risk.columns else 0
+    html = f"""<!doctype html>
+<html><head><meta charset='utf-8'/><title>Criminal Network Intelligence Report</title>
+<style>
+body {{ font-family: Inter, system-ui, sans-serif; margin: 0; background:#0b1020; color:#edf2ff; }}
+main {{ max-width: 1200px; margin: 0 auto; padding: 36px; }}
+h1 {{ margin-bottom: 4px; }} h2 {{ margin-top: 34px; color:#7dd3fc; }}
+.meta {{ color:#a8b4cb; }} .grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }}
+.card {{ background:#121a30; border:1px solid #26314d; border-radius:14px; padding:18px; }}
+table {{ width:100%; border-collapse:collapse; background:#11192d; }}
+th,td {{ padding:9px; border-bottom:1px solid #28344f; text-align:left; font-size:13px; }}
+th {{ color:#b9c6df; }}
+.notice {{ background:#1a233c; border-left:4px solid #38bdf8; padding:12px 16px; margin:18px 0; }}
+</style></head><body><main>
+<h1>Criminal Network Intelligence Report</h1>
+<div class='meta'>Synthetic / analyst-assistance mode · generated from the local graph</div>
+<div class='notice'>Analytical priority scores are heuristic and must not be treated as findings of guilt or legal evidence. Validate conclusions against source evidence.</div>
+<div class='grid'>
+<div class='card'><strong>Entities</strong><br><span style='font-size:28px'>{self.G.number_of_nodes()}</span></div>
+<div class='card'><strong>Relationships</strong><br><span style='font-size:28px'>{self.G.number_of_edges()}</span></div>
+<div class='card'><strong>Communities</strong><br><span style='font-size:28px'>{len(set(self.community_detection().values()))}</span></div>
+<div class='card'><strong>High analytical risk</strong><br><span style='font-size:28px'>{high}</span></div>
+</div>
+<h2>Analytical priority</h2>{table(kingpins)}
+<h2>Bridge candidates</h2>{table(bridges)}
+<h2>Anomaly candidates</h2>{table(anomalies)}
+<h2>Analytical risk scores</h2>{table(risk.head(25))}
+<h2>Suspicious relationships</h2>{table(flags)}
+<h2>Potential links</h2>{table(links)}
 <h2>Timeline</h2>{table(timeline)}
-</body></html>"""
-    path = Path(path)
+</main></body></html>"""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
     return path
@@ -130,36 +447,49 @@ def export_pdf_report(self, path: Path) -> Path:
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
-        kingpins = self.key_player_ranking(8)
+
+        ranking = self.key_player_explanations(8)
         c = canvas.Canvas(str(path), pagesize=letter)
-        width, height = letter
-        y = height - 50
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(50, y, "Criminal Network Analysis Report")
-        y -= 24
-        c.setFont("Helvetica", 10)
-        c.drawString(50, y, f"Nodes: {self.G.number_of_nodes()}  Edges: {self.G.number_of_edges()}")
-        y -= 20
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(50, y, "Top kingpins")
-        y -= 16
+        _, height = letter
+        y = height - 48
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(50, y, "Criminal Network Intelligence Report")
+        y -= 22
         c.setFont("Helvetica", 9)
-        for _, row in kingpins.iterrows():
-            c.drawString(50, y, f"{int(row['rank'])}. {row['name']} score={row['kingpin_score']}")
-            y -= 12
-            if y < 50:
-                c.showPage(); y = height - 50
+        c.drawString(50, y, "Synthetic / analyst-assistance mode. Analytical priority is not legal evidence.")
+        y -= 22
+        c.drawString(50, y, f"Entities: {self.G.number_of_nodes()}    Relationships: {self.G.number_of_edges()}")
+        y -= 24
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(50, y, "Top analytical-priority entities")
+        y -= 18
+        c.setFont("Helvetica", 9)
+        for _, row in ranking.iterrows():
+            line = f"{int(row['rank'])}. {row['name']} | priority={row['kingpin_score']:.2f} | risk={row['risk_score']:.2f}"
+            c.drawString(50, y, line[:105])
+            y -= 13
+            if y < 48:
+                c.showPage()
+                y = height - 48
+                c.setFont("Helvetica", 9)
         c.save()
         return path
     except Exception as exc:
-        logger.warning("reportlab unavailable (%s)", exc)
+        logger.warning("PDF export unavailable (%s)", exc)
         return self.export_html_report(path.with_suffix(".html"))
 
 
-def apply():
+def apply() -> None:
     from src.graph_engine import CriminalNetworkGraph
+
     CriminalNetworkGraph.link_prediction = link_prediction
     CriminalNetworkGraph.key_player_ranking = key_player_ranking
+    CriminalNetworkGraph.bridge_entities = bridge_entities
+    CriminalNetworkGraph.community_summary = community_summary
+    CriminalNetworkGraph.anomaly_detection = anomaly_detection
+    CriminalNetworkGraph.entity_profile = entity_profile
+    CriminalNetworkGraph.shortest_investigation_path = shortest_investigation_path
+    CriminalNetworkGraph.key_player_explanations = key_player_explanations
     CriminalNetworkGraph.to_pyvis_html = to_pyvis_html
     CriminalNetworkGraph.export_html_report = export_html_report
     CriminalNetworkGraph.export_pdf_report = export_pdf_report
