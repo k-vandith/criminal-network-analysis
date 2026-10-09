@@ -222,14 +222,14 @@ def render_inspector(graph) -> None:
         for k, v in profile["attributes"].items():
             st.markdown(f"<div class='muted'>{k}: {v}</div>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    if c1.button("2-hop", use_container_width=True):
+    if c1.button("2-hop", width="stretch"):
         st.session_state.focus_nodes = graph.neighborhood(eid, 2)
         st.session_state.page = "Network"
         st.rerun()
-    if c2.button("Find path", use_container_width=True):
+    if c2.button("Find path", width="stretch"):
         st.session_state.page = "Investigate"
         st.rerun()
-    if st.button("Pin to case", use_container_width=True):
+    if st.button("Pin to case", width="stretch"):
         st.session_state.setdefault("pinned", [])
         if eid not in st.session_state.pinned:
             st.session_state.pinned.append(eid)
@@ -268,14 +268,14 @@ def render_map(graph, nodes: list[str]) -> None:
     st.caption(f"Network map · {len(nodes)} entities in view · seed 42 layout")
     fig = figure(graph, nodes, labels=labels, mode=mode, path_nodes=st.session_state.get("path_nodes") or [])
     try:
-        event = st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False}, on_select="rerun", key="map")
+        event = st.plotly_chart(fig, width="stretch", config={"displaylogo": False}, on_select="rerun", key="map")
         points = []
         if event and getattr(event, "selection", None):
             points = event.selection.get("points", [])
         if points and points[0].get("customdata"):
             st.session_state.selected = points[0]["customdata"]
     except TypeError:
-        st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+        st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
 
 def screen_overview(graph, nodes: list[str]) -> None:
@@ -395,7 +395,7 @@ def screen_entities(graph) -> None:
     st.dataframe(
         rank,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={"kingpin_score": st.column_config.NumberColumn("Analytical priority", format="%.3f")},
     )
 
@@ -518,14 +518,14 @@ def screen_reports(graph, out_dir: Path) -> None:
     }
     chosen = [label for label, default in opts.items() if st.checkbox(label, value=default)]
     c1, c2 = st.columns(2)
-    if c1.button("Generate HTML", use_container_width=True):
+    if c1.button("Generate HTML", width="stretch"):
         path = graph.export_html_report(out_dir / "network_intelligence_report.html")
         text = path.read_text(encoding="utf-8")
         banner = "<p>Sections: " + ", ".join(chosen) + "</p>"
         text = text.replace("</h1>", "</h1>" + banner, 1)
         path.write_text(text, encoding="utf-8")
-        st.download_button("Download HTML", text, file_name=path.name, use_container_width=True)
-    if c2.button("Generate PDF", use_container_width=True):
+        st.download_button("Download HTML", text, file_name=path.name, width="stretch")
+    if c2.button("Generate PDF", width="stretch"):
         path = graph.export_pdf_report(out_dir / "network_intelligence_report.pdf")
         if path.suffix.lower() == ".pdf":
             st.download_button("Download PDF", path.read_bytes(), file_name=path.name, mime="application/pdf")
