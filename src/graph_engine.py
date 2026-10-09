@@ -9,7 +9,6 @@ from typing import Any
 
 import networkx as nx
 import pandas as pd
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +196,6 @@ class CriminalNetworkGraph:
         if self.G.number_of_nodes() == 0:
             return go.Figure()
         pos = nx.spring_layout(self.G, seed=42, weight="weight")
-        communities = self.community_detection()
         edge_x, edge_y = [], []
         for u, v in self.G.edges():
             x0, y0 = pos[u]

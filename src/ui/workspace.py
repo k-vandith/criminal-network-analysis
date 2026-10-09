@@ -1,10 +1,10 @@
 """CRIMENET workspace: rail navigation, map, inspector, cases. No tab dashboard."""
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import networkx as nx
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
@@ -82,11 +82,22 @@ def _priority_color(score: float) -> str:
     return "LOW"
 
 
+@lru_cache(maxsize=32)
+def _layout(nodes: tuple[str, ...], edges: tuple[tuple[str, str, float], ...]) -> dict[str, tuple[float, float]]:
+    """Spring layout is the expensive step. Cache it for a fixed node/edge set."""
+    g = nx.Graph()
+    g.add_nodes_from(nodes)
+    g.add_weighted_edges_from(edges)
+    pos = nx.spring_layout(g, seed=42, weight="weight")
+    return {n: (float(p[0]), float(p[1])) for n, p in pos.items()}
+
+
 def figure(graph, nodes: list[str], *, labels: bool, mode: str, path_nodes: list[str]) -> go.Figure:
     if not nodes:
         return go.Figure()
-    sub = graph.G.subgraph(nodes).copy()
-    pos = nx.spring_layout(sub, seed=42, weight="weight")
+    sub = graph.G.subgraph(nodes)
+    edge_key = tuple(sorted((u, v, float(d.get("weight", 1.0))) for u, v, d in sub.edges(data=True)))
+    pos = _layout(tuple(sorted(nodes)), edge_key)
     communities = graph.community_detection()
     path_set = set(path_nodes or [])
     path_edges = set()

@@ -166,7 +166,7 @@ cd criminal-network-analysis
 .venv\Scripts\Activate.ps1
 python scripts/generate_demo_data.py
 python -m pytest -q
-streamlit run src/app.py
+python run.py
 ```
 
 ### Linux / macOS
@@ -176,7 +176,7 @@ cd criminal-network-analysis
 source .venv/bin/activate
 python scripts/generate_demo_data.py
 python -m pytest -q
-streamlit run src/app.py
+python run.py
 ```
 
 Generates `data/sample/synthetic_network.json` for offline demos. Open http://localhost:8501

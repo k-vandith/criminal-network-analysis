@@ -2,13 +2,12 @@
 
 THEME_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 :root {
   --bg:#07090d; --panel:#10151c; --panel2:#0c1118; --line:#243041;
   --text:#e7edf5; --muted:#8b9bb0; --accent:#7eb6ff; --danger:#e06b75;
   --warn:#e2b15a; --ok:#6fbfa0;
 }
-html, body, .stApp { background:var(--bg) !important; color:var(--text); font-family:'IBM Plex Sans',sans-serif; }
+html, body, .stApp { background:var(--bg) !important; color:var(--text); font-family:"Segoe UI", ui-sans-serif, system-ui, sans-serif; }
 #MainMenu, footer, header[data-testid="stHeader"] { visibility:hidden; height:0; }
 .block-container { padding:0.6rem 1rem 1rem 1rem; max-width:100%; }
 section[data-testid="stSidebar"] {
