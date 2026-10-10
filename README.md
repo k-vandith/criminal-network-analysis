@@ -1,112 +1,238 @@
-# LinkLens
+# Criminal Network Analysis System
 
-**Local-first network exploration for structured relationship data.** LinkLens turns CSV and JSON interaction records into an interactive graph, explainable structural rankings, community summaries, timelines, and a portable case report. It runs in Python on CPU and does not require paid API keys.
+Graph-based analysis platform for exploring relationships, centrality, communities, and risk in criminal association networks. Built for investigators and analysts working with structured relationship data.
 
-> **Important:** LinkLens produces structural review signals only. Scores and detected patterns are not proof of criminal activity, guilt, identity, or intent. Always validate source records and consider innocent explanations.
+## Problem Statement
 
-## Highlights
+Law-enforcement and compliance teams need to map associations between persons, organisations, locations, and events. Manual spreadsheets do not scale; analysts need centrality measures, community detection, path finding, and risk scoring on interactive graphs — offline and without sending data to third-party SaaS.
 
-- Interactive relationship graph with filters for entity type and relationship type.
-- Import a single interaction CSV/JSON file or separate entity and relationship CSVs.
-- Column mapping, input validation, record previews, and a downloadable CSV template.
-- Key-entity ranking by connection count, bridge position, network influence, and blended review priority.
-- Community detection, timeline analysis, candidate missing links, and explainable review signals.
-- HTML and PDF case-summary exports, plus a plain-English glossary.
-- Fictional sample case with synthetic names and identifiers.
-- Local session processing: uploaded records are not sent to an external analysis service.
+## Overview
 
-## Start on Windows
+This project provides:
 
-    git clone https://github.com/k-vandith/criminal-network-analysis.git
-    cd criminal-network-analysis
-    python -m venv .venv
-    .venv\Scripts\Activate.ps1
-    python -m pip install --upgrade pip
-    pip install -r requirements-dev.txt
-    python -m pip install -e .
-    python run.py
+- Import of nodes and edges from CSV / JSON
+- Interactive graph visualisation (Streamlit + Plotly)
+- Degree, betweenness, closeness, and eigenvector centrality
+- Community detection (greedy modularity)
+- Suspicious-pattern heuristics and risk scores
+- Export of subgraphs and analysis reports
+- Fully offline demo mode with synthetic data
 
-Open http://localhost:8501.
+## Features (V3 intelligence workspace)
 
-If PowerShell blocks activation, run Set-ExecutionPolicy with Scope Process and ExecutionPolicy Bypass in that terminal, then activate the environment again.
+The UI is a desktop investigation workspace, not a tabbed dashboard:
 
-## Linux / macOS
+- Left navigation rail: Overview, Network, Investigate, Entities, Signals, Timeline, Cases, Reports, Settings
+- Command search across entity name, ID, type, and relationship type
+- Central network map with risk, community, and type color modes, labels, hop focus, and path highlight
+- Right-side entity intelligence panel driven by the selected entity
+- Signal center for bridge candidates, anomalies, suspicious links, and potential links
+- Community cards that filter the map
+- Local JSON case files (`data/cases/cases.json`)
+- Report builder for local HTML and PDF
+- Analytical priority is a heuristic review signal, not legal evidence
 
-    git clone https://github.com/k-vandith/criminal-network-analysis.git
-    cd criminal-network-analysis
-    python3 -m venv .venv
-    source .venv/bin/activate
-    python -m pip install --upgrade pip
-    pip install -r requirements-dev.txt
-    python -m pip install -e .
-    python run.py
+## Previous feature set still in the engine
 
-## Input formats
+- **Dark analyst console** – overview metrics, priority queue, and filtered workspace
+- **Graph engine** – NetworkX weighted undirected graph (`CriminalNetworkGraph`)
+- **Centrality suite** – degree, weighted betweenness, closeness, eigenvector (numpy fallback)
+- **Analytical priority** – explainable composite heuristic (not a finding of guilt)
+- **Bridge candidates** – entities linking different communities
+- **Anomaly candidates** – degree and weighted-degree z-score signals for review
+- **Community summaries** – size, density, dominant type, core entity
+- **Entity investigation** – profile, reasons, neighbors, shortest relationship path
+- **Link prediction** and suspicious-relationship heuristics
+- **Timeline** for synthetic event entities
+- **Local HTML / PDF reports** (PDF falls back to HTML if ReportLab is missing)
+- **Demo mode** – synthetic network generator only (no real persons)
 
-### Interaction table
+## Architecture
 
-A CSV needs at least two columns identifying the two sides of each relationship. Suggested headers:
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│  Streamlit  │────▶│ Graph Engine │────▶│  NetworkX   │
+│     UI      │     │  (analysis)  │     │  + metrics  │
+└─────────────┘     └──────┬───────┘     └─────────────┘
+                           │
+                    ┌──────▼───────┐
+                    │  CSV / JSON  │
+                    │  data layer  │
+                    └──────────────┘
+```
 
-    source,target,relationship,date,weight
-    ENTITY-01,ENTITY-02,phone contact,2025-02-04,2
-    ENTITY-02,ORG-01,associated with,2025-02-07,1
-    ENTITY-01,ORG-01,coordination,2025-02-09,3
+## Tech Stack
 
-During import, map the source and target columns. Date, relationship, weight, and display-name columns are optional. Repeated interactions between the same two IDs are combined into one graph edge with an interaction count and combined weight.
+- Python 3.11+
+- NetworkX
+- Streamlit + Plotly
+- Pandas / NumPy
+- scikit-learn (optional clustering helpers)
+- pytest
 
-JSON files may contain a list of interaction records, or an object with nodes/entities and edges/relationships arrays.
+## Repository Structure
 
-### Separate entities and relationships
+```
+criminal-network-analysis/
+├── README.md
+├── requirements.txt
+├── .gitignore
+├── src/
+│   ├── app.py              # Streamlit intelligence console
+│   ├── graph_engine.py     # Core graph analysis
+│   └── graph_features.py   # Analyst features (monkey-patched)
+├── tests/
+│   ├── test_graph.py
+│   └── test_advanced_features.py
+├── data/
+├── scripts/
+│   ├── setup_env.py
+│   ├── setup.sh
+│   ├── setup.ps1
+│   └── generate_demo_data.py
+└── docs/
+```
 
-The entity CSV should include a stable entity ID column and may include name/type columns. The relationship CSV should include source and target IDs; relationship type, timestamp, and weight are optional. Endpoints absent from the entity table are kept with type unknown.
+## System Requirements
 
-## Navigation
+| Mode   | CPU        | RAM  | Disk | GPU        |
+|--------|------------|------|------|------------|
+| Demo   | Any modern | 2 GB | 1 GB | Not needed |
 
-- **Overview** — network summary and recommended starting points.
-- **Upload & Map Columns** — load a CSV/JSON dataset or pair of CSV files.
-- **Network Explorer** — filter relationships, focus on an entity, and inspect direct links.
-- **Key Players** — compare structural rankings and read what each measure means.
-- **Groups & Communities** — explore detected clusters.
-- **Timeline** — chart dated relationships and filter records by date range.
-- **Suspicious Patterns** — review heuristic signals and candidate missing links.
-- **Case Report** — download a local HTML or PDF summary.
-- **Glossary** — plain-English analytical definitions.
+## Installation
 
-## CLI
+### Recommended (all platforms) — automated bootstrap
 
-Validate and summarize an interaction CSV without launching the web UI:
+Handles missing `ensurepip`, symlink restrictions, and installs dependencies into `.venv`:
 
-    python -m linklens.cli interactions.csv --source source --target target
+```bash
+git clone https://github.com/k-vandith/criminal-network-analysis.git
+cd criminal-network-analysis
+python3 scripts/setup_env.py    # or:  python scripts/setup_env.py
+```
 
-## Tests
+Then activate:
 
-    python -m pytest -q
+```bash
+# Linux / macOS
+source .venv/bin/activate
 
-App navigation smoke tests use Streamlit AppTest. Run the full suite in the development environment installed from requirements-dev.txt.
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+```
 
-## Privacy and limitations
+### Manual setup
 
-- Files stay in the current application session and are not sent to a third-party analysis API.
-- The app has no account system, role-based access controls, or multi-user case storage. Do not expose a running instance to untrusted networks.
-- The graph is undirected; some real-world relationships are directional or temporal.
-- Community, centrality, bridge, and link-prediction algorithms simplify real activity and can produce false positives.
-- Large graphs may require more CPU and memory. The graph display is limited to a manageable visible subset, while summary metrics are computed across the loaded graph.
-- Use synthetic records for public demos. Avoid committing sensitive or real case files to the repository.
+#### Windows (PowerShell)
 
-## Project layout
+```powershell
+git clone https://github.com/k-vandith/criminal-network-analysis.git
+cd criminal-network-analysis
+python -m venv .venv --copies
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-    src/
-      app.py                 Streamlit entry point
-      linklens/
-        app.py               Workspace and UI
-        core.py              Graph import, metrics, communities, review signals
-        io.py                CSV/JSON readers and reports
-        theme.py             Offline-friendly UI theme
-        cli.py               CSV summary command
-    tests/
-      test_core.py
-      test_app_smoke.py
+#### Linux / macOS
+
+```bash
+git clone https://github.com/k-vandith/criminal-network-analysis.git
+cd criminal-network-analysis
+# If venv fails with ensurepip errors:
+#   sudo apt install python3-venv python3-pip
+python3 -m venv .venv --copies
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### Why `--copies`?
+
+Some environments cannot create symlinks inside a venv (`Operation not permitted` on `lib64 → lib`). Using `--copies` avoids that. `scripts/setup_env.py` tries `--copies` first automatically.
+
+## Environment Variables
+
+Optional. Defaults work for demo mode. See `.env.example` if present.
+
+## Dataset / Demo Mode
+
+Synthetic data only. Do not load real case files into a public clone.
+
+### Windows (PowerShell)
+
+```powershell
+cd criminal-network-analysis
+.venv\Scripts\Activate.ps1
+python scripts/generate_demo_data.py
+python -m pytest -q
+python run.py
+```
+
+### Linux / macOS
+
+```bash
+cd criminal-network-analysis
+source .venv/bin/activate
+python scripts/generate_demo_data.py
+python -m pytest -q
+python run.py
+```
+
+Generates `data/sample/synthetic_network.json` for offline demos. Open http://localhost:8501
+
+## API Usage
+
+This project is UI-first. Core analysis is available programmatically:
+
+```python
+from src.graph_engine import CriminalNetworkGraph
+import src.graph_features  # registers analyst methods
+
+g = CriminalNetworkGraph()
+g.import_json("data/sample/synthetic_network.json")
+print(g.centrality_analysis())
+print(g.key_player_ranking(10))
+print(g.bridge_entities())
+```
+
+`kingpin_score` is the historical column name for **analytical priority**. It is a heuristic, not evidence.
+
+## Testing
+
+```bash
+python -m pytest -q
+```
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `ModuleNotFoundError: src` | Run from project root with `PYTHONPATH=.` |
+| `venv` / ensurepip fails | Run `python3 scripts/setup_env.py` or install `python3-venv` |
+| `Operation not permitted` on lib64 | Use `python3 -m venv .venv --copies` |
+| Plotly blank chart | Ensure browser allows WebGL; update plotly |
+
+## Limitations
+
+- Designed for moderate-size graphs (thousands of nodes), not billion-edge graphs.
+- Analytical risk and analytical priority are heuristics. They are **not** proof of guilt, not a legal finding, and not evidence.
+- The system is an offline synthetic demonstration. It does not harvest external data and must not be loaded with real-person case data in a public repository.
+- Community detection, bridge ratios, anomaly z-scores, and link scores are signals for analyst review only.
+- The graph is undirected. Betweenness uses edge `weight`. Eigenvector falls back to a NumPy solver, then zeros, if power iteration does not converge.
+
+## Security / Privacy
+
+- No network calls required for core analysis.
+- Do not commit real case data; use synthetic demos for public repos.
+- Designed for defensive investigative analytics only.
+
+## Future Improvements
+
+- GraphML / Neo4j connectors
+- Temporal edge analysis
+- Role-based access for multi-analyst deployments
 
 ## License
 
-MIT. See LICENSE.
+MIT

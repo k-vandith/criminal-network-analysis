@@ -1,2 +1,0 @@
-"""LinkLens network investigation toolkit."""
-__version__ = "1.0.0"
