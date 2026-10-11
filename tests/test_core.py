@@ -34,6 +34,7 @@ def test_interaction_mapping_and_date_timeline():
     bundle = build_from_interactions(frame, "caller", "callee", "kind", "when")
     assert bundle.graph.number_of_nodes() == 3
     assert bundle.graph.number_of_edges() == 3
+    assert all(bundle.graph.nodes[node]["entity_type"] == "unknown" for node in bundle.graph)
     assert len(timeline_frame(bundle)) == 3
 
 
@@ -70,3 +71,12 @@ def test_hidden_links_table_has_expected_columns():
 def test_no_real_person_claims_in_sample():
     bundle = sample_case()
     assert "Fictional" in bundle.source_label
+
+
+
+def test_interaction_import_does_not_guess_entity_types() -> None:
+    frame = pd.DataFrame({"from": ["A"], "to": ["B"], "relationship": ["payment"]})
+    bundle = build_from_interactions(frame, "from", "to", "relationship")
+
+    assert bundle.graph.nodes["A"]["entity_type"] == "unknown"
+    assert bundle.graph.nodes["B"]["entity_type"] == "unknown"
