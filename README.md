@@ -58,7 +58,7 @@ JSON files may contain a list of interaction records, or an object with nodes/en
 
 ### Separate entities and relationships
 
-The entity CSV should include a stable entity ID column and may include name/type columns. The relationship CSV should include source and target IDs; relationship type, timestamp, and weight are optional. Endpoints absent from the entity table are kept with type unknown.
+The entity CSV should include a stable entity ID column and may include name/type columns. The relationship CSV should include source and target IDs; relationship type, timestamp, and weight are optional. Relationship-only imports do not guess entity types: endpoints stay **unknown** unless an entity-type column is supplied.
 
 ## Navigation
 
@@ -88,7 +88,9 @@ App navigation smoke tests use Streamlit AppTest. Run the full suite in the deve
 
 - Files stay in the current application session and are not sent to a third-party analysis API.
 - The app has no account system, role-based access controls, or multi-user case storage. Do not expose a running instance to untrusted networks.
+- The app starts with no case loaded. Load a dataset or explicitly choose **Load fictional sample case**; sample rankings are not case findings.
 - The graph is undirected; some real-world relationships are directional or temporal.
+- Candidate missing-link values are shared-neighbor overlap percentages, not confidence that a relationship exists.
 - Community, centrality, bridge, and link-prediction algorithms simplify real activity and can produce false positives.
 - Large graphs may require more CPU and memory. The graph display is limited to a manageable visible subset, while summary metrics are computed across the loaded graph.
 - Use synthetic records for public demos. Avoid committing sensitive or real case files to the repository.
