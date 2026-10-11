@@ -129,8 +129,8 @@ def _set_bundle(bundle):
 
 
 def _init():
-    st.session_state.setdefault("ll_bundle", sample_case())
-    st.session_state.setdefault("ll_page", "Overview")
+    st.session_state.setdefault("ll_bundle", GraphBundle(nx.Graph(), source_label="No dataset loaded"))
+    st.session_state.setdefault("ll_page", "Upload & Map Columns")
     st.session_state.setdefault("ll_selected", None)
 
 
@@ -263,22 +263,31 @@ def render():
         st.divider()
         st.markdown("**Current case**")
         st.caption(st.session_state.ll_bundle.source_label)
-        if st.button("Reset to sample case", use_container_width=True):
+        if st.button("Load fictional sample case", use_container_width=True):
             _set_bundle(sample_case())
             st.rerun()
         st.caption("Analysis runs locally. Uploaded records are not transmitted to a service.")
 
     bundle = st.session_state.ll_bundle
     graph = bundle.graph
-    analysis, findings, stats, timeline = _derived(bundle)
+    has_data = graph.number_of_nodes() > 0
     sample = "fictional" in bundle.source_label.lower()
+    if has_data:
+        analysis, findings, stats, timeline = _derived(bundle)
     st.markdown(
         "<div class='ll-hero'><div class='ll-eyebrow'>NETWORK INTELLIGENCE WORKSPACE</div>"
         "<h1>See the connections behind the data.</h1>"
         "<p>Explore relationships, find entities that connect groups, and surface patterns that deserve a closer look.</p>"
-        f"<span class='ll-tag'>● Local analysis</span><span class='ll-tag'>{'Fictional sample loaded' if sample else 'Uploaded data in this session'}</span></div>",
+        f"<span class='ll-tag'>● Local analysis</span><span class='ll-tag'>{'Fictional sample loaded' if sample else 'Uploaded data in this session' if has_data else 'No dataset loaded'}</span></div>",
         unsafe_allow_html=True,
     )
+
+    if not has_data:
+        st.info("No network results are shown until you upload relationship data or explicitly load the fictional sample.")
+        _upload_page()
+        st.divider()
+        st.caption("LinkLens · Uploaded relationships only · Structural signals are not legal evidence.")
+        return
 
     if page == "Overview":
         columns = st.columns(4)
