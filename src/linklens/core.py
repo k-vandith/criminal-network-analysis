@@ -262,13 +262,13 @@ def suspicious_findings(bundle: GraphBundle, result: dict[str,Any]) -> list[dict
 
 def likely_hidden_links(bundle: GraphBundle, top_k: int=8) -> pd.DataFrame:
     g=bundle.graph; rows=[]
-    if g.number_of_nodes()<3:return pd.DataFrame(columns=["Entity A","Entity B","Shared contacts","Structural confidence"])
+    if g.number_of_nodes()<3:return pd.DataFrame(columns=["Entity A","Entity B","Shared contacts","Shared-neighbor overlap (%)"])
     for a,b,score in nx.jaccard_coefficient(g):
         if score<=0:continue
         common=sorted(set(g.neighbors(a))&set(g.neighbors(b)))
-        rows.append({"Entity A":_clean(g.nodes[a].get("name"),str(a)),"Entity B":_clean(g.nodes[b].get("name"),str(b)),"Shared contacts":", ".join(_clean(g.nodes[n].get("name"),str(n)) for n in common[:4]),"Structural confidence":round(float(score)*100,1),"_score":score})
+        rows.append({"Entity A":_clean(g.nodes[a].get("name"),str(a)),"Entity B":_clean(g.nodes[b].get("name"),str(b)),"Shared contacts":", ".join(_clean(g.nodes[n].get("name"),str(n)) for n in common[:4]),"Shared-neighbor overlap (%)":round(float(score)*100,1),"_score":score})
     rows.sort(key=lambda r:(-r["_score"],r["Entity A"],r["Entity B"]))
-    return pd.DataFrame([{k:v for k,v in r.items() if k!="_score"} for r in rows[:top_k]],columns=["Entity A","Entity B","Shared contacts","Structural confidence"])
+    return pd.DataFrame([{k:v for k,v in r.items() if k!="_score"} for r in rows[:top_k]],columns=["Entity A","Entity B","Shared contacts","Shared-neighbor overlap (%)"])
 
 def timeline_frame(bundle: GraphBundle) -> pd.DataFrame:
     """Count dated interaction events, not aggregated graph edges."""
