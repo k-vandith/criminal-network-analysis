@@ -98,3 +98,38 @@ def test_hidden_link_overlap_is_jaccard_percentage_not_probability():
                 ((pairs["Entity A"] == "B") & (pairs["Entity B"] == "A"))]
     assert len(row) == 1
     assert row.iloc[0]["Shared-neighbor overlap (%)"] == pytest.approx(33.3)
+
+
+
+@pytest.mark.parametrize("bad_weight", ["not-a-number", "0", "-2", "inf", "1000001"])
+def test_interaction_import_rejects_invalid_weights(bad_weight):
+    frame = pd.DataFrame({"source": ["A"], "target": ["B"], "weight": [bad_weight]})
+
+    with pytest.raises(ValueError, match="weight"):
+        build_from_interactions(frame, "source", "target", weight_col="weight")
+
+
+def test_interaction_import_warns_and_keeps_first_conflicting_entity_name():
+    frame = pd.DataFrame({
+        "source": ["A", "A"],
+        "target": ["B", "C"],
+        "source_name": ["Alice", "Alicia"],
+        "target_name": ["Bob", "Carol"],
+    })
+
+    bundle = build_from_interactions(
+        frame, "source", "target",
+        source_name_col="source_name",
+        target_name_col="target_name",
+    )
+
+    assert bundle.graph.nodes["A"]["name"] == "Alice"
+    assert any("Conflicting display names" in warning for warning in bundle.warnings)
+
+
+def test_nodes_edges_import_rejects_duplicate_entity_ids():
+    nodes = pd.DataFrame({"id": ["A", "A"], "name": ["Alice", "Alicia"]})
+    edges = pd.DataFrame({"source": ["A"], "target": ["B"]})
+
+    with pytest.raises(ValueError, match="Duplicate entity ID"):
+        build_from_nodes_edges(nodes, edges, "id", "source", "target", "name")
