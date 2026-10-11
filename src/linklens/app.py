@@ -408,7 +408,7 @@ def render():
         if hidden.empty:
             st.info("No candidates found from shared neighbors.")
         else:
-            st.dataframe(hidden.rename(columns={"Structural confidence":"Shared-neighbor overlap (%)"}),hide_index=True,use_container_width=True)
+            st.dataframe(hidden,hide_index=True,use_container_width=True)
 
     elif page == "Case Report":
         st.caption("A portable summary of the loaded network and the signals suggested for review.")
