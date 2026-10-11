@@ -289,6 +289,16 @@ def render():
         st.caption("LinkLens · Uploaded relationships only · Structural signals are not legal evidence.")
         return
 
+    if analysis.get("betweenness_approximate"):
+        st.warning(
+            "Betweenness centrality is approximated from 200 sampled pivots for this large graph. "
+            "Treat rankings as estimates and validate important nodes against the source records."
+        )
+    st.caption(
+        "Review-priority scores are relative to this dataset, not probabilities or findings of wrongdoing. "
+        "Communities and candidate links are structural heuristics."
+    )
+
     if page == "Overview":
         columns = st.columns(4)
         for col, item in zip(columns, [
