@@ -44,24 +44,51 @@ def build_from_interactions(frame: pd.DataFrame, source_col: str, target_col: st
     if len(frame) > MAX_ROWS: raise ValueError(f"The file exceeds the {MAX_ROWS:,}-row limit.")
     if source_col not in frame or target_col not in frame: raise ValueError("Choose valid source and target columns.")
     if source_col == target_col: raise ValueError("Source and target must be different columns.")
-    graph, skipped = nx.Graph(), 0
+    graph, skipped, self_links, invalid_dates = nx.Graph(), 0, 0, 0
     for _, row in frame.iterrows():
         a, b = _clean(row.get(source_col)), _clean(row.get(target_col))
-        if not a or not b: skipped += 1; continue
+        if not a or not b:
+            skipped += 1
+            continue
+        if a == b:
+            self_links += 1
+            continue
         an = _clean(row.get(source_name_col), a) if source_name_col else a
         bn = _clean(row.get(target_name_col), b) if target_name_col else b
         graph.add_node(a, name=an, label=an, entity_type="person", type="person")
         graph.add_node(b, name=bn, label=bn, entity_type="person", type="person")
         rel = _clean(row.get(relationship_col), "contact") if relationship_col else "contact"
-        day = _date(row.get(date_col)) if date_col else ""
+        raw_day = row.get(date_col) if date_col else None
+        day = _date(raw_day) if date_col else ""
+        if date_col and _clean(raw_day) and not day:
+            invalid_dates += 1
         strength = _weight(row.get(weight_col)) if weight_col else 1.0
         if graph.has_edge(a, b):
-            edge = graph[a][b]; edge["weight"] += strength; edge["interaction_count"] += 1
-            if day and day >= edge.get("date", ""): edge["date"], edge["relationship"], edge["rel_type"] = day, rel, rel
-        else: graph.add_edge(a, b, weight=strength, relationship=rel, rel_type=rel, date=day, interaction_count=1)
+            edge = graph[a][b]
+            edge["weight"] += strength
+            edge["interaction_count"] += 1
+            edge.setdefault("interaction_dates", [])
+            if day:
+                edge["interaction_dates"].append(day)
+            if day and day >= edge.get("date", ""):
+                edge["date"], edge["relationship"], edge["rel_type"] = day, rel, rel
+        else:
+            graph.add_edge(
+                a, b, weight=strength, relationship=rel, rel_type=rel, date=day,
+                interaction_count=1, interaction_dates=[day] if day else [],
+            )
     if not graph.number_of_edges(): raise ValueError("No usable relationships found. Check the mapped columns.")
-    warnings = [f"Skipped {skipped} rows with a missing endpoint."] if skipped else []
-    graph.graph["interaction_rows"] = len(frame) - skipped
+    warnings = []
+    if skipped:
+        warnings.append(f"Skipped {skipped} rows with a missing endpoint.")
+    if self_links:
+        warnings.append(f"Skipped {self_links} self-links where source and target IDs match.")
+    if invalid_dates:
+        warnings.append(
+            f"Found {invalid_dates} invalid non-empty date value(s); those interactions remain in the graph "
+            "but are omitted from the timeline."
+        )
+    graph.graph["interaction_rows"] = len(frame) - skipped - self_links
     return GraphBundle(graph, source_label, warnings)
 
 def build_from_nodes_edges(nodes: pd.DataFrame, edges: pd.DataFrame, node_id_col: str,
@@ -82,21 +109,48 @@ def build_from_nodes_edges(nodes: pd.DataFrame, edges: pd.DataFrame, node_id_col
         if kind not in ENTITY_TYPES: kind = "unknown"
         graph.add_node(nid, name=name, label=name, entity_type=kind, type=kind,
                        **{str(k): _clean(v) for k, v in row.items() if k not in {node_id_col, node_name_col, node_type_col} and _clean(v)})
-    skipped = 0
+    skipped, self_links, invalid_dates = 0, 0, 0
     for _, row in edges.iterrows():
         a, b = _clean(row.get(edge_source_col)), _clean(row.get(edge_target_col))
-        if not a or not b: skipped += 1; continue
+        if not a or not b:
+            skipped += 1
+            continue
+        if a == b:
+            self_links += 1
+            continue
         for nid in (a,b):
             if nid not in graph: graph.add_node(nid, name=nid, label=nid, entity_type="unknown", type="unknown")
         rel = _clean(row.get(relationship_col), "linked") if relationship_col else "linked"
-        day = _date(row.get(date_col)) if date_col else ""
+        raw_day = row.get(date_col) if date_col else None
+        day = _date(raw_day) if date_col else ""
+        if date_col and _clean(raw_day) and not day:
+            invalid_dates += 1
         strength = _weight(row.get(weight_col)) if weight_col else 1.0
         if graph.has_edge(a,b):
-            graph[a][b]["weight"] += strength; graph[a][b]["interaction_count"] += 1
-            if day and day >= graph[a][b].get("date", ""): graph[a][b]["date"] = day
-        else: graph.add_edge(a,b,weight=strength,relationship=rel,rel_type=rel,date=day,interaction_count=1)
+            edge = graph[a][b]
+            edge["weight"] += strength
+            edge["interaction_count"] += 1
+            edge.setdefault("interaction_dates", [])
+            if day:
+                edge["interaction_dates"].append(day)
+            if day and day >= edge.get("date", ""):
+                edge["date"] = day
+        else:
+            graph.add_edge(
+                a,b,weight=strength,relationship=rel,rel_type=rel,date=day,
+                interaction_count=1,interaction_dates=[day] if day else [],
+            )
     if not graph.number_of_edges(): raise ValueError("No connected relationships found in the mapped files.")
-    warnings = [f"Skipped {skipped} relationship rows with missing endpoints."] if skipped else []
+    warnings = []
+    if skipped:
+        warnings.append(f"Skipped {skipped} relationship rows with missing endpoints.")
+    if self_links:
+        warnings.append(f"Skipped {self_links} self-links where source and target IDs match.")
+    if invalid_dates:
+        warnings.append(
+            f"Found {invalid_dates} invalid non-empty date value(s); those interactions remain in the graph "
+            "but are omitted from the timeline."
+        )
     return GraphBundle(graph, source_label, warnings)
 
 def sample_case() -> GraphBundle:
@@ -118,9 +172,16 @@ def sample_case() -> GraphBundle:
         nonlocal counter
         counter+=1; day=(start+timedelta(days=offset if offset is not None else (counter*3+(counter%7)*2)%175)).isoformat()
         if g.has_edge(a,b):
-            e=g[a][b]; e["weight"]+=weight; e["interaction_count"]+=1
+            e=g[a][b]
+            e["weight"]+=weight
+            e["interaction_count"]+=1
+            e.setdefault("interaction_dates", []).append(day)
             if day>=e.get("date",""): e.update(date=day,relationship=rel,rel_type=rel)
-        else: g.add_edge(a,b,weight=weight,relationship=rel,rel_type=rel,date=day,interaction_count=1,evidence="Fictional sample event")
+        else:
+            g.add_edge(
+                a,b,weight=weight,relationship=rel,rel_type=rel,date=day,interaction_count=1,
+                interaction_dates=[day],evidence="Fictional sample event",
+            )
     for lo,hi,leader in [(1,10,2),(11,19,11),(20,28,20)]:
         for i in range(lo,hi+1):
             for j in range(i+1,min(hi,i+2)+1): link(f"P{i:02}",f"P{j:02}","repeated contact" if j==i+1 else "shared trip",1.0+((i+j)%3)*.35)
@@ -167,9 +228,31 @@ def analyze(bundle: GraphBundle) -> dict[str, Any]:
     return {"metrics":metrics,"communities":comm,"community_map":cmap,"degree":degree,"betweenness":between,"influence":influence,"cross_links":cross}
 
 def suspicious_findings(bundle: GraphBundle, result: dict[str,Any]) -> list[dict[str,Any]]:
+    """Return higher-confidence structural signals, not every cross-community connection.
+
+    Cross-community edges are common in ordinary random graphs. A bridge signal is
+    emitted only for a true articulation node with substantial normalized
+    betweenness; weaker structural connectors remain visible in the metrics table.
+    """
     g=bundle.graph; m=result["metrics"]; out=[]
-    for _,r in m[m.bridge_links>0].sort_values(["bridge_links","betweenness"],ascending=False).head(4).iterrows():
-        out.append({"severity":"High" if r.bridge_links>=3 else "Moderate","title":f"{r['name']} links separate groups","evidence":f"{int(r.bridge_links)} connection(s) reach other detected communities.","why":"Cross-group connections can show how activity moves between otherwise separate circles; legitimate explanations are possible.","next":"Review source records and dates before drawing a conclusion.","entity_id":r.id})
+    articulation_ids = {str(n) for n in nx.articulation_points(g)}
+    bridge_rows = m[
+        (m["bridge_links"] > 0)
+        & (m["betweenness"] >= 0.30)
+        & (m["id"].isin(articulation_ids))
+    ].sort_values(["bridge_links","betweenness"],ascending=False)
+    for _,r in bridge_rows.head(4).iterrows():
+        out.append({
+            "severity":"High" if r.bridge_links>=3 else "Moderate",
+            "title":f"{r['name']} is a structural cut point",
+            "evidence":(
+                f"Removing this entity disconnects part of the graph; normalized betweenness is "
+                f"{float(r.betweenness):.3f} and {int(r.bridge_links)} connection(s) reach other detected communities."
+            ),
+            "why":"A cut point can connect otherwise separated parts of a network, but legitimate explanations remain possible.",
+            "next":"Verify source records, dates and alternative explanations before drawing a conclusion.",
+            "entity_id":r.id,
+        })
     shared=[]
     for n,a in g.nodes(data=True):
         kind=_clean(a.get("entity_type",a.get("type"))).lower()
@@ -188,8 +271,17 @@ def likely_hidden_links(bundle: GraphBundle, top_k: int=8) -> pd.DataFrame:
     return pd.DataFrame([{k:v for k,v in r.items() if k!="_score"} for r in rows[:top_k]],columns=["Entity A","Entity B","Shared contacts","Structural confidence"])
 
 def timeline_frame(bundle: GraphBundle) -> pd.DataFrame:
-    dates=[_date(a.get("date")) for _,_,a in bundle.graph.edges(data=True) if _date(a.get("date"))]
-    if not dates:return pd.DataFrame(columns=["Date","Interactions"])
+    """Count dated interaction events, not aggregated graph edges."""
+    dates = []
+    for _, _, attrs in bundle.graph.edges(data=True):
+        if "interaction_dates" in attrs:
+            event_dates = attrs.get("interaction_dates") or []
+        else:
+            # Backward compatibility for graphs built before event history was stored.
+            event_dates = [attrs.get("date", "")]
+        dates.extend(parsed for value in event_dates if (parsed := _date(value)))
+    if not dates:
+        return pd.DataFrame(columns=["Date", "Interactions"])
     return pd.Series(dates).value_counts().sort_index().rename_axis("Date").reset_index(name="Interactions")
 
 def graph_stats(bundle: GraphBundle) -> dict[str,int]:
