@@ -65,7 +65,7 @@ def test_json_interactions_and_templates():
 def test_hidden_links_table_has_expected_columns():
     frame = pd.DataFrame({"source": ["A", "A", "B", "C"], "target": ["B", "C", "D", "D"]})
     bundle = build_from_interactions(frame, "source", "target")
-    assert "Structural confidence" in likely_hidden_links(bundle).columns
+    assert "Shared-neighbor overlap (%)" in likely_hidden_links(bundle).columns
 
 
 def test_no_real_person_claims_in_sample():
@@ -80,3 +80,18 @@ def test_interaction_import_does_not_guess_entity_types() -> None:
 
     assert bundle.graph.nodes["A"]["entity_type"] == "unknown"
     assert bundle.graph.nodes["B"]["entity_type"] == "unknown"
+
+
+
+def test_hidden_link_overlap_is_jaccard_percentage_not_probability():
+    frame = pd.DataFrame({
+        "source": ["A", "A", "B", "B"],
+        "target": ["C", "D", "C", "E"],
+    })
+    bundle = build_from_interactions(frame, "source", "target")
+    pairs = likely_hidden_links(bundle)
+
+    row = pairs[((pairs["Entity A"] == "A") & (pairs["Entity B"] == "B")) |
+                ((pairs["Entity A"] == "B") & (pairs["Entity B"] == "A"))]
+    assert len(row) == 1
+    assert row.iloc[0]["Shared-neighbor overlap (%)"] == pytest.approx(33.3)
