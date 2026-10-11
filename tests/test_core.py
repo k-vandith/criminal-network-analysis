@@ -21,6 +21,9 @@ def test_sample_case_is_fictional_and_nontrivial():
 def test_analysis_returns_ranked_explanations():
     bundle = sample_case()
     result = analyze(bundle)
+    assert result["betweenness_approximate"] is False
+    assert result["betweenness_method"] == "exact"
+    assert "not a probability" in result["review_priority_semantics"]
     assert not result["metrics"].empty
     assert result["metrics"].review_priority.between(0, 100).all()
     assert result["communities"]
