@@ -55,7 +55,7 @@ def build_from_interactions(frame: pd.DataFrame, source_col: str, target_col: st
             continue
         an = _clean(row.get(source_name_col), a) if source_name_col else a
         bn = _clean(row.get(target_name_col), b) if target_name_col else b
-        graph.add_node(a, name=an, label=an, entity_type="person", type="person")
+        graph.add_node(a, name=an, label=an, entity_type="unknown", type="unknown")
         graph.add_node(b, name=bn, label=bn, entity_type="person", type="person")
         rel = _clean(row.get(relationship_col), "contact") if relationship_col else "contact"
         raw_day = row.get(date_col) if date_col else None
