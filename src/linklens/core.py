@@ -200,7 +200,8 @@ def analyze(bundle: GraphBundle) -> dict[str, Any]:
     g=bundle.graph
     if not g.number_of_nodes(): raise ValueError("The network contains no entities.")
     degree = dict(g.degree())
-    if g.number_of_edges() and g.number_of_nodes() > 1200:
+    approximate_betweenness = bool(g.number_of_edges() and g.number_of_nodes() > 1200)
+    if approximate_betweenness:
         # Sampling keeps CPU cost manageable for larger uploads.
         between = nx.betweenness_centrality(g, k=min(200, g.number_of_nodes()), normalized=True, seed=19)
     else:
@@ -225,7 +226,18 @@ def analyze(bundle: GraphBundle) -> dict[str, Any]:
         sub=g.subgraph(members); types=[_clean(g.nodes[n].get("entity_type","unknown")) for n in members]
         leader=max(members,key=lambda n:(degree[n],str(g.nodes[n].get("name",n))))
         comm.append({"community":i,"name":f"Group {chr(65+i%26)}","size":len(members),"density":round(nx.density(sub),2) if len(members)>1 else 0,"dominant_type":pd.Series(types).value_counts().index[0] if types else "entities","leader":_clean(g.nodes[leader].get("name"),str(leader)),"leader_id":str(leader),"members":sorted(map(str,members))})
-    return {"metrics":metrics,"communities":comm,"community_map":cmap,"degree":degree,"betweenness":between,"influence":influence,"cross_links":cross}
+    return {
+        "metrics": metrics,
+        "communities": comm,
+        "community_map": cmap,
+        "degree": degree,
+        "betweenness": between,
+        "influence": influence,
+        "cross_links": cross,
+        "betweenness_approximate": approximate_betweenness,
+        "betweenness_method": "sampled_200_pivots_seed_19" if approximate_betweenness else "exact",
+        "review_priority_semantics": "dataset-relative structural review score, not a probability",
+    }
 
 def suspicious_findings(bundle: GraphBundle, result: dict[str,Any]) -> list[dict[str,Any]]:
     """Return higher-confidence structural signals, not every cross-community connection.
