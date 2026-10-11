@@ -23,5 +23,5 @@ PAGES = [
 def test_each_page_renders_without_exception(page):
     app = AppTest.from_file(str(APP), default_timeout=45).run()
     assert not app.exception
-    app.radio[0].set_value(page).run()
+    app.sidebar.radio[0].set_value(page).run()
     assert not app.exception

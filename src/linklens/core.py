@@ -31,10 +31,17 @@ def _date(value: Any) -> str:
     return "" if pd.isna(parsed) else parsed.strftime("%Y-%m-%d")
 
 def _weight(value: Any) -> float:
+    """Parse a positive interaction strength without silently clamping bad input."""
+    cleaned = _clean(value)
+    if not cleaned:
+        return 1.0
     try:
-        n = float(value)
-        return min(1_000_000.0, max(0.01, n)) if math.isfinite(n) else 1.0
-    except (TypeError, ValueError): return 1.0
+        number = float(cleaned)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid interaction weight {cleaned!r}; weights must be positive finite numbers.") from error
+    if not math.isfinite(number) or number <= 0 or number > 1_000_000:
+        raise ValueError("Interaction weights must be positive, finite, and no greater than 1000000.")
+    return number
 
 def build_from_interactions(frame: pd.DataFrame, source_col: str, target_col: str,
     relationship_col: str | None = None, date_col: str | None = None,
@@ -45,6 +52,7 @@ def build_from_interactions(frame: pd.DataFrame, source_col: str, target_col: st
     if source_col not in frame or target_col not in frame: raise ValueError("Choose valid source and target columns.")
     if source_col == target_col: raise ValueError("Source and target must be different columns.")
     graph, skipped, self_links, invalid_dates = nx.Graph(), 0, 0, 0
+    name_conflicts: set[str] = set()
     for _, row in frame.iterrows():
         a, b = _clean(row.get(source_col)), _clean(row.get(target_col))
         if not a or not b:
@@ -55,8 +63,16 @@ def build_from_interactions(frame: pd.DataFrame, source_col: str, target_col: st
             continue
         an = _clean(row.get(source_name_col), a) if source_name_col else a
         bn = _clean(row.get(target_name_col), b) if target_name_col else b
-        graph.add_node(a, name=an, label=an, entity_type="person", type="person")
-        graph.add_node(b, name=bn, label=bn, entity_type="person", type="person")
+        for node_id, supplied_name in ((a, an), (b, bn)):
+            if node_id not in graph:
+                graph.add_node(node_id, name=supplied_name, label=supplied_name, entity_type="unknown", type="unknown")
+                continue
+            existing_name = _clean(graph.nodes[node_id].get("name"), node_id)
+            if existing_name == node_id and supplied_name != node_id:
+                graph.nodes[node_id]["name"] = supplied_name
+                graph.nodes[node_id]["label"] = supplied_name
+            elif supplied_name != node_id and existing_name != supplied_name:
+                name_conflicts.add(node_id)
         rel = _clean(row.get(relationship_col), "contact") if relationship_col else "contact"
         raw_day = row.get(date_col) if date_col else None
         day = _date(raw_day) if date_col else ""
@@ -88,6 +104,13 @@ def build_from_interactions(frame: pd.DataFrame, source_col: str, target_col: st
             f"Found {invalid_dates} invalid non-empty date value(s); those interactions remain in the graph "
             "but are omitted from the timeline."
         )
+    if name_conflicts:
+        examples = ", ".join(sorted(name_conflicts)[:8])
+        suffix = "…" if len(name_conflicts) > 8 else ""
+        warnings.append(
+            f"Conflicting display names were supplied for {len(name_conflicts)} entity ID(s) "
+            f"({examples}{suffix}); the first non-empty name was retained. Verify the entity mapping."
+        )
     graph.graph["interaction_rows"] = len(frame) - skipped - self_links
     return GraphBundle(graph, source_label, warnings)
 
@@ -101,9 +124,15 @@ def build_from_nodes_edges(nodes: pd.DataFrame, edges: pd.DataFrame, node_id_col
     if node_id_col not in nodes: raise ValueError("Choose a valid entity ID column.")
     if edge_source_col == edge_target_col: raise ValueError("Relationship source and target must be different columns.")
     graph = nx.Graph()
+    seen_node_ids: set[str] = set()
     for _, row in nodes.iterrows():
         nid = _clean(row.get(node_id_col))
         if not nid: continue
+        if nid in seen_node_ids:
+            raise ValueError(
+                f"Duplicate entity ID {nid!r} in the entities file. Deduplicate or resolve conflicting entity records before analysis."
+            )
+        seen_node_ids.add(nid)
         name = _clean(row.get(node_name_col), nid) if node_name_col else nid
         kind = _clean(row.get(node_type_col), "unknown").lower() if node_type_col else "unknown"
         if kind not in ENTITY_TYPES: kind = "unknown"
@@ -200,7 +229,8 @@ def analyze(bundle: GraphBundle) -> dict[str, Any]:
     g=bundle.graph
     if not g.number_of_nodes(): raise ValueError("The network contains no entities.")
     degree = dict(g.degree())
-    if g.number_of_edges() and g.number_of_nodes() > 1200:
+    approximate_betweenness = bool(g.number_of_edges() and g.number_of_nodes() > 1200)
+    if approximate_betweenness:
         # Sampling keeps CPU cost manageable for larger uploads.
         between = nx.betweenness_centrality(g, k=min(200, g.number_of_nodes()), normalized=True, seed=19)
     else:
@@ -225,7 +255,18 @@ def analyze(bundle: GraphBundle) -> dict[str, Any]:
         sub=g.subgraph(members); types=[_clean(g.nodes[n].get("entity_type","unknown")) for n in members]
         leader=max(members,key=lambda n:(degree[n],str(g.nodes[n].get("name",n))))
         comm.append({"community":i,"name":f"Group {chr(65+i%26)}","size":len(members),"density":round(nx.density(sub),2) if len(members)>1 else 0,"dominant_type":pd.Series(types).value_counts().index[0] if types else "entities","leader":_clean(g.nodes[leader].get("name"),str(leader)),"leader_id":str(leader),"members":sorted(map(str,members))})
-    return {"metrics":metrics,"communities":comm,"community_map":cmap,"degree":degree,"betweenness":between,"influence":influence,"cross_links":cross}
+    return {
+        "metrics": metrics,
+        "communities": comm,
+        "community_map": cmap,
+        "degree": degree,
+        "betweenness": between,
+        "influence": influence,
+        "cross_links": cross,
+        "betweenness_approximate": approximate_betweenness,
+        "betweenness_method": "sampled_200_pivots_seed_19" if approximate_betweenness else "exact",
+        "review_priority_semantics": "dataset-relative structural review score, not a probability",
+    }
 
 def suspicious_findings(bundle: GraphBundle, result: dict[str,Any]) -> list[dict[str,Any]]:
     """Return higher-confidence structural signals, not every cross-community connection.
@@ -262,13 +303,13 @@ def suspicious_findings(bundle: GraphBundle, result: dict[str,Any]) -> list[dict
 
 def likely_hidden_links(bundle: GraphBundle, top_k: int=8) -> pd.DataFrame:
     g=bundle.graph; rows=[]
-    if g.number_of_nodes()<3:return pd.DataFrame(columns=["Entity A","Entity B","Shared contacts","Structural confidence"])
+    if g.number_of_nodes()<3:return pd.DataFrame(columns=["Entity A","Entity B","Shared contacts","Shared-neighbor overlap (%)"])
     for a,b,score in nx.jaccard_coefficient(g):
         if score<=0:continue
         common=sorted(set(g.neighbors(a))&set(g.neighbors(b)))
-        rows.append({"Entity A":_clean(g.nodes[a].get("name"),str(a)),"Entity B":_clean(g.nodes[b].get("name"),str(b)),"Shared contacts":", ".join(_clean(g.nodes[n].get("name"),str(n)) for n in common[:4]),"Structural confidence":round(float(score)*100,1),"_score":score})
+        rows.append({"Entity A":_clean(g.nodes[a].get("name"),str(a)),"Entity B":_clean(g.nodes[b].get("name"),str(b)),"Shared contacts":", ".join(_clean(g.nodes[n].get("name"),str(n)) for n in common[:4]),"Shared-neighbor overlap (%)":round(float(score)*100,1),"_score":score})
     rows.sort(key=lambda r:(-r["_score"],r["Entity A"],r["Entity B"]))
-    return pd.DataFrame([{k:v for k,v in r.items() if k!="_score"} for r in rows[:top_k]],columns=["Entity A","Entity B","Shared contacts","Structural confidence"])
+    return pd.DataFrame([{k:v for k,v in r.items() if k!="_score"} for r in rows[:top_k]],columns=["Entity A","Entity B","Shared contacts","Shared-neighbor overlap (%)"])
 
 def timeline_frame(bundle: GraphBundle) -> pd.DataFrame:
     """Count dated interaction events, not aggregated graph edges."""

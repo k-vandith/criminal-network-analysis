@@ -21,6 +21,9 @@ def test_sample_case_is_fictional_and_nontrivial():
 def test_analysis_returns_ranked_explanations():
     bundle = sample_case()
     result = analyze(bundle)
+    assert result["betweenness_approximate"] is False
+    assert result["betweenness_method"] == "exact"
+    assert "not a probability" in result["review_priority_semantics"]
     assert not result["metrics"].empty
     assert result["metrics"].review_priority.between(0, 100).all()
     assert result["communities"]
@@ -34,6 +37,7 @@ def test_interaction_mapping_and_date_timeline():
     bundle = build_from_interactions(frame, "caller", "callee", "kind", "when")
     assert bundle.graph.number_of_nodes() == 3
     assert bundle.graph.number_of_edges() == 3
+    assert all(bundle.graph.nodes[node]["entity_type"] == "unknown" for node in bundle.graph)
     assert len(timeline_frame(bundle)) == 3
 
 
@@ -64,9 +68,68 @@ def test_json_interactions_and_templates():
 def test_hidden_links_table_has_expected_columns():
     frame = pd.DataFrame({"source": ["A", "A", "B", "C"], "target": ["B", "C", "D", "D"]})
     bundle = build_from_interactions(frame, "source", "target")
-    assert "Structural confidence" in likely_hidden_links(bundle).columns
+    assert "Shared-neighbor overlap (%)" in likely_hidden_links(bundle).columns
 
 
 def test_no_real_person_claims_in_sample():
     bundle = sample_case()
     assert "Fictional" in bundle.source_label
+
+
+
+def test_interaction_import_does_not_guess_entity_types() -> None:
+    frame = pd.DataFrame({"from": ["A"], "to": ["B"], "relationship": ["payment"]})
+    bundle = build_from_interactions(frame, "from", "to", "relationship")
+
+    assert bundle.graph.nodes["A"]["entity_type"] == "unknown"
+    assert bundle.graph.nodes["B"]["entity_type"] == "unknown"
+
+
+
+def test_hidden_link_overlap_is_jaccard_percentage_not_probability():
+    frame = pd.DataFrame({
+        "source": ["A", "A", "B", "B"],
+        "target": ["C", "D", "C", "E"],
+    })
+    bundle = build_from_interactions(frame, "source", "target")
+    pairs = likely_hidden_links(bundle)
+
+    row = pairs[((pairs["Entity A"] == "A") & (pairs["Entity B"] == "B")) |
+                ((pairs["Entity A"] == "B") & (pairs["Entity B"] == "A"))]
+    assert len(row) == 1
+    assert row.iloc[0]["Shared-neighbor overlap (%)"] == pytest.approx(33.3)
+
+
+
+@pytest.mark.parametrize("bad_weight", ["not-a-number", "0", "-2", "inf", "1000001"])
+def test_interaction_import_rejects_invalid_weights(bad_weight):
+    frame = pd.DataFrame({"source": ["A"], "target": ["B"], "weight": [bad_weight]})
+
+    with pytest.raises(ValueError, match="weight"):
+        build_from_interactions(frame, "source", "target", weight_col="weight")
+
+
+def test_interaction_import_warns_and_keeps_first_conflicting_entity_name():
+    frame = pd.DataFrame({
+        "source": ["A", "A"],
+        "target": ["B", "C"],
+        "source_name": ["Alice", "Alicia"],
+        "target_name": ["Bob", "Carol"],
+    })
+
+    bundle = build_from_interactions(
+        frame, "source", "target",
+        source_name_col="source_name",
+        target_name_col="target_name",
+    )
+
+    assert bundle.graph.nodes["A"]["name"] == "Alice"
+    assert any("Conflicting display names" in warning for warning in bundle.warnings)
+
+
+def test_nodes_edges_import_rejects_duplicate_entity_ids():
+    nodes = pd.DataFrame({"id": ["A", "A"], "name": ["Alice", "Alicia"]})
+    edges = pd.DataFrame({"source": ["A"], "target": ["B"]})
+
+    with pytest.raises(ValueError, match="Duplicate entity ID"):
+        build_from_nodes_edges(nodes, edges, "id", "source", "target", "name")
