@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import networkx as nx
-
 from linklens import app as app_module
 
 
